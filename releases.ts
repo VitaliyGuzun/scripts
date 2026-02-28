@@ -34,15 +34,31 @@ function releases() {
 
     const cache = loadCache();
 
-    const tagsOutput = exec(
-        "gh release list --repo miroapp-dev/client --limit 10 --json tagName -q '.[].tagName'",
+    const releasesJson = exec(
+        "gh release list --repo miroapp-dev/client --limit 10 --json tagName,publishedAt",
     );
-    const tags = tagsOutput.split('\n').filter(Boolean);
+    const releasesData: { tagName: string; publishedAt: string }[] = releasesJson
+        ? JSON.parse(releasesJson)
+        : [];
+    const tags = releasesData.map((r) => r.tagName);
+    const tagDates = new Map(
+        releasesData.map((r) => [
+            r.tagName,
+            new Date(r.publishedAt).toLocaleString('en-GB', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+            }),
+        ]),
+    );
 
     let prev = '';
     for (const tag of tags) {
         if (prev) {
-            console.log(prev);
+            console.log(`${prev}  ${tagDates.get(prev) || ''}`);
 
             const logOutput = exec(`git log --format="%h %s" "${tag}..${prev}"`);
             if (logOutput) {
@@ -75,7 +91,7 @@ function releases() {
     }
 
     if (prev) {
-        console.log(prev);
+        console.log(`${prev}  ${tagDates.get(prev) || ''}`);
         console.log('  (oldest in range — no prior release to diff)');
     }
 
