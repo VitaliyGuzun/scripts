@@ -1,6 +1,6 @@
 #!/usr/bin/env ts-node
 
-import {execSync} from 'child_process';
+import { execSync } from 'child_process';
 
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
@@ -11,52 +11,57 @@ const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
 function gh(args: string): string {
-	return execSync(`gh ${args}`, {encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024}).trim();
+  return execSync(`gh ${args}`, {
+    encoding: 'utf-8',
+    maxBuffer: 10 * 1024 * 1024,
+  }).trim();
 }
 
 function graphql(query: string): any {
-	const escaped = query.replace(/'/g, "'\\''");
-	const raw = execSync(`gh api graphql -f query='${escaped}'`, {
-		encoding: 'utf-8',
-		maxBuffer: 10 * 1024 * 1024,
-	});
-	return JSON.parse(raw);
+  const escaped = query.replace(/'/g, "'\\''");
+  const raw = execSync(`gh api graphql -f query='${escaped}'`, {
+    encoding: 'utf-8',
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  return JSON.parse(raw);
 }
 
 function section(title: string) {
-	console.log(`\n${BOLD}━━━ ${title} ━━━${RESET}`);
+  console.log(`\n${BOLD}━━━ ${title} ━━━${RESET}`);
 }
 
 async function main() {
-	// Detect current PR
-	const prArg = process.argv[2];
-	let prNumber: number;
-	let owner: string;
-	let repo: string;
+  // Detect current PR
+  const prArg = process.argv[2];
+  let prNumber: number;
+  let owner: string;
+  let repo: string;
 
-	if (prArg) {
-		// Could be a number or URL
-		const urlMatch = prArg.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-		if (urlMatch) {
-			owner = urlMatch[1];
-			repo = urlMatch[2];
-			prNumber = parseInt(urlMatch[3], 10);
-		} else {
-			prNumber = parseInt(prArg, 10);
-			const repoInfo = JSON.parse(gh('repo view --json owner,name'));
-			owner = repoInfo.owner.login;
-			repo = repoInfo.name;
-		}
-	} else {
-		// Use current branch PR
-		const prJson = JSON.parse(gh('pr view --json number,url,headRefName,baseRefName'));
-		prNumber = prJson.number;
-		const repoInfo = JSON.parse(gh('repo view --json owner,name'));
-		owner = repoInfo.owner.login;
-		repo = repoInfo.name;
-	}
+  if (prArg) {
+    // Could be a number or URL
+    const urlMatch = prArg.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+    if (urlMatch) {
+      owner = urlMatch[1];
+      repo = urlMatch[2];
+      prNumber = parseInt(urlMatch[3], 10);
+    } else {
+      prNumber = parseInt(prArg, 10);
+      const repoInfo = JSON.parse(gh('repo view --json owner,name'));
+      owner = repoInfo.owner.login;
+      repo = repoInfo.name;
+    }
+  } else {
+    // Use current branch PR
+    const prJson = JSON.parse(
+      gh('pr view --json number,url,headRefName,baseRefName'),
+    );
+    prNumber = prJson.number;
+    const repoInfo = JSON.parse(gh('repo view --json owner,name'));
+    owner = repoInfo.owner.login;
+    repo = repoInfo.name;
+  }
 
-	const data = graphql(`
+  const data = graphql(`
 		query {
 			repository(owner: "${owner}", name: "${repo}") {
 				pullRequest(number: ${prNumber}) {
@@ -135,189 +140,255 @@ async function main() {
 		}
 	`);
 
-	const pr = data.data.repository.pullRequest;
+  const pr = data.data.repository.pullRequest;
 
-	console.log(`\n${DIM}${pr.title}${RESET}`);
-	console.log(`${DIM}${pr.headRefName} → ${pr.baseRefName}${RESET}`);
-	console.log(`Github: ${DIM}${pr.url}${RESET}`);
+  console.log(`\n${DIM}${pr.title}${RESET}`);
+  console.log(`${DIM}${pr.headRefName} → ${pr.baseRefName}${RESET}`);
+  console.log(`Github: ${DIM}${pr.url}${RESET}`);
 
-	const jiraMatch = pr.headRefName.match(/^([A-Z]+-\d+)/);
-	if (jiraMatch) {
-		console.log(`Jira: ${DIM}https://miro.atlassian.net/browse/${jiraMatch[1]}${RESET}`);
-	}
+  const jiraMatch = pr.headRefName.match(/^([A-Z]+-\d+)/);
+  if (jiraMatch) {
+    console.log(
+      `Jira: ${DIM}https://miro.atlassian.net/browse/${jiraMatch[1]}${RESET}`,
+    );
+  }
 
-	// ── CI/CD ──
-	section('CI/CD');
+  // ── CI/CD ──
+  section('CI/CD');
 
-	const checks = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? [];
-	const failed: {name: string; url: string}[] = [];
+  const checks =
+    pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes ?? [];
+  const failed: { name: string; url: string }[] = [];
 
-	for (const check of checks) {
-		if (check.__typename === 'CheckRun') {
-			if (check.conclusion === 'FAILURE' || check.conclusion === 'TIMED_OUT' || check.conclusion === 'CANCELLED') {
-				failed.push({name: check.name, url: check.detailsUrl});
-			}
-		} else if (check.__typename === 'StatusContext') {
-			if (check.state === 'FAILURE' || check.state === 'ERROR') {
-				failed.push({name: check.context, url: check.targetUrl});
-			}
-		}
-	}
-
-	const pending = checks.filter(
-		(c: any) =>
-			(c.__typename === 'CheckRun' && c.status === 'IN_PROGRESS') ||
-			(c.__typename === 'CheckRun' && c.status === 'QUEUED') ||
-			(c.__typename === 'StatusContext' && c.state === 'PENDING'),
-	);
-
-	if (failed.length === 0) {
-		if (pending.length > 0) {
-			console.log(`✅ No failures ${DIM}(${pending.length} still running)${RESET}`);
-		} else {
-			console.log(`✅ CI/CD is fine`);
-		}
-	} else {
-		console.log(`${RED}${failed.length} failed:${RESET}`);
-		for (const f of failed) {
-      if (f.name !== 'Test E2E / E2E results') {
-			  console.log(`  ${RED}✗${RESET} ${f.name}`);
-			  console.log(`    ${DIM}${f.url}${RESET}`);
+  for (const check of checks) {
+    if (check.__typename === 'CheckRun') {
+      if (
+        check.conclusion === 'FAILURE' ||
+        check.conclusion === 'TIMED_OUT' ||
+        check.conclusion === 'CANCELLED'
+      ) {
+        failed.push({ name: check.name, url: check.detailsUrl });
       }
-		}
-		if (pending.length > 0) {
-			console.log(`${YELLOW}  + ${pending.length} still running${RESET}`);
-		}
-	}
+    } else if (check.__typename === 'StatusContext') {
+      if (check.state === 'FAILURE' || check.state === 'ERROR') {
+        failed.push({ name: check.context, url: check.targetUrl });
+      }
+    }
+  }
 
-	// ── Comments ──
-	section('Comments');
+  const pending = checks.filter(
+    (c: any) =>
+      (c.__typename === 'CheckRun' && c.status === 'IN_PROGRESS') ||
+      (c.__typename === 'CheckRun' && c.status === 'QUEUED') ||
+      (c.__typename === 'StatusContext' && c.state === 'PENDING'),
+  );
 
-	const issueComments = (pr.comments?.nodes ?? []).map((c: any) => ({
-		author: c.author?.login ?? 'unknown',
-		body: c.body,
-		url: c.url,
-		createdAt: c.createdAt,
-		type: 'comment' as const,
-	}));
+  if (failed.length === 0) {
+    if (pending.length > 0) {
+      console.log(
+        `✅ No failures ${DIM}(${pending.length} still running)${RESET}`,
+      );
+    } else {
+      console.log(`✅ CI/CD is fine`);
+    }
+  } else {
+    console.log(`${RED}${failed.length} failed:${RESET}`);
+    for (const f of failed) {
+      if (f.name !== 'Test E2E / E2E results') {
+        console.log(`  ${RED}✗${RESET} ${f.name}`);
+        console.log(`    ${DIM}${f.url}${RESET}`);
+      }
+    }
+    if (pending.length > 0) {
+      console.log(`${YELLOW}  + ${pending.length} still running${RESET}`);
+    }
+  }
 
-	const reviewThreads = (pr.reviewThreads?.nodes ?? [])
-		.filter((t: any) => t.comments.nodes.length > 0)
-		.map((t: any) => ({
-			comments: t.comments.nodes.map((c: any) => ({
-				author: c.author?.login ?? 'unknown',
-				body: c.body,
-				url: c.url,
-				createdAt: c.createdAt,
-			})),
-			path: t.comments.nodes[0].path,
-			line: t.comments.nodes[0].line,
-			resolved: t.isResolved,
-		}))
-		.sort((a: any, b: any) => new Date(a.comments[0].createdAt).getTime() - new Date(b.comments[0].createdAt).getTime());
+  // ── Comments ──
+  section('Comments');
 
-	const totalComments = issueComments.length + reviewThreads.reduce((sum: number, t: any) => sum + t.comments.length, 0);
+  const issueComments = (pr.comments?.nodes ?? []).map((c: any) => ({
+    author: c.author?.login ?? 'unknown',
+    body: c.body,
+    url: c.url,
+    createdAt: c.createdAt,
+    type: 'comment' as const,
+  }));
 
-	if (issueComments.length === 0 && reviewThreads.length === 0) {
-		console.log(`${DIM}No comments${RESET}`);
-	} else {
-		console.log(`${totalComments} total comment(s):`);
+  const reviewThreads = (pr.reviewThreads?.nodes ?? [])
+    .filter((t: any) => t.comments.nodes.length > 0)
+    .map((t: any) => ({
+      comments: t.comments.nodes.map((c: any) => ({
+        author: c.author?.login ?? 'unknown',
+        body: c.body,
+        url: c.url,
+        createdAt: c.createdAt,
+      })),
+      path: t.comments.nodes[0].path,
+      line: t.comments.nodes[0].line,
+      resolved: t.isResolved,
+    }))
+    .sort(
+      (a: any, b: any) =>
+        new Date(a.comments[0].createdAt).getTime() -
+        new Date(b.comments[0].createdAt).getTime(),
+    );
 
-		// Show issue comments
-		for (const c of issueComments) {
-			const date = new Date(c.createdAt).toLocaleDateString('en-US', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
-			const preview = c.body.split('\n')[0].slice(0, 100);
-			console.log(`  ${CYAN}@${c.author}${RESET} ${DIM}${date}${RESET}`);
-			console.log(`    ${preview}${c.body.length > 100 ? '…' : ''}`);
-			console.log(`    ${DIM}${c.url}${RESET}`);
-		}
+  const totalComments =
+    issueComments.length +
+    reviewThreads.reduce((sum: number, t: any) => sum + t.comments.length, 0);
 
-		// Show review threads
-		for (const thread of reviewThreads) {
-			const resolved = thread.resolved ? `${GREEN}[resolved]${RESET}` : `${YELLOW}[unresolved]${RESET}`;
-			const location = thread.path ? `${DIM}${thread.path}${thread.line ? `:${thread.line}` : ''}${RESET} ` : '';
+  if (issueComments.length === 0 && reviewThreads.length === 0) {
+    console.log(`${DIM}No comments${RESET}`);
+  } else {
+    console.log(`${totalComments} total comment(s):`);
 
-			for (let i = 0; i < thread.comments.length; i++) {
-				const c = thread.comments[i];
-				const date = new Date(c.createdAt).toLocaleDateString('en-US', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
-				const preview = c.body.split('\n')[0].slice(0, 100);
-				const isReply = i > 0;
-				const prefix = isReply ? '    ↳ ' : '  ';
+    // Show issue comments
+    for (const c of issueComments) {
+      const date = new Date(c.createdAt).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const preview = c.body.split('\n')[0].slice(0, 100);
+      console.log(`  ${CYAN}@${c.author}${RESET} ${DIM}${date}${RESET}`);
+      console.log(`    ${preview}${c.body.length > 100 ? '…' : ''}`);
+      console.log(`    ${DIM}${c.url}${RESET}`);
+    }
 
-				if (i === 0) {
-					console.log(`${prefix}${CYAN}@${c.author}${RESET} ${DIM}${date}${RESET} ${resolved}`);
-					console.log(`  ${prefix}${location}${preview}${c.body.length > 100 ? '…' : ''}`);
-				} else {
-					console.log(`${prefix}${CYAN}@${c.author}${RESET} ${DIM}${date}${RESET}`);
-					console.log(`  ${prefix}${preview}${c.body.length > 100 ? '…' : ''}`);
-				}
-			}
-			console.log(`  ${DIM}${thread.comments[0].url}${RESET}`);
-		}
-	}
+    // Show review threads
+    for (const thread of reviewThreads) {
+      const location = thread.path
+        ? `${DIM}${thread.path}${thread.line ? `:${thread.line}` : ''}${RESET} `
+        : '';
+      const replyCount = thread.comments.length - 1;
+      const statusIcon = thread.resolved
+        ? `${GREEN}✓${RESET}`
+        : `${YELLOW}●${RESET}`;
+      const firstComment = thread.comments[0];
+      const date = new Date(firstComment.createdAt).toLocaleDateString(
+        'en-US',
+        { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' },
+      );
+      const preview = firstComment.body.split('\n')[0].slice(0, 100);
 
-	// ── Merge Status ──
-	section('Merge Status');
+      if (thread.resolved) {
+        // Compact format for resolved threads
+        console.log(
+          ` ✅ ${CYAN}@${firstComment.author}${RESET} ${DIM}${date}${RESET} ${DIM} ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}${RESET}`,
+        );
+        console.log(
+          `    ${location}${preview}${firstComment.body.length > 100 ? '…' : ''}`,
+        );
+        console.log(`    ${DIM}${thread.comments[0].url}${RESET}`);
+      } else {
+        // Full format for unresolved threads
+        for (let i = 0; i < thread.comments.length; i++) {
+          const c = thread.comments[i];
+          const date = new Date(c.createdAt).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+          const preview = c.body.split('\n')[0].slice(0, 100);
+          const isReply = i > 0;
+          const prefix = isReply ? '    ↳ ' : '  ';
 
-	const reasons: string[] = [];
+          if (i === 0) {
+            console.log(
+              `${prefix}${statusIcon} ${CYAN}@${c.author}${RESET} ${DIM}${date}${RESET} ${DIM}☐ ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}${RESET}`,
+            );
+            console.log(
+              `  ${prefix}${location}${preview}${c.body.length > 100 ? '…' : ''}`,
+            );
+          } else {
+            console.log(
+              `${prefix}${CYAN}@${c.author}${RESET} ${DIM}${date}${RESET}`,
+            );
+            console.log(
+              `  ${prefix}${preview}${c.body.length > 100 ? '…' : ''}`,
+            );
+          }
+        }
+        console.log(`  ${DIM}${thread.comments[0].url}${RESET}`);
+      }
+    }
+  }
 
-	// Conflicts
-	if (pr.mergeable === 'CONFLICTING') {
-		reasons.push(`${RED}✗ Has merge conflicts with ${pr.baseRefName}${RESET}`);
-	} else if (pr.mergeable === 'UNKNOWN') {
-		reasons.push(`${YELLOW}? Merge conflict status unknown (still calculating)${RESET}`);
-	}
+  // ── Merge Status ──
+  section('Merge Status');
 
-	// Reviews
-	if (pr.reviewDecision === 'REVIEW_REQUIRED') {
-		const pendingReviewers = (pr.reviewRequests?.nodes ?? []).map((r: any) => {
-			const reviewer = r.requestedReviewer;
-			return reviewer.slug ? `team/${reviewer.slug}` : reviewer.login;
-		});
-		let msg = `${RED}✗ Review required${RESET}`;
-		if (pendingReviewers.length > 0) {
-			msg += `\n    Waiting on: ${pendingReviewers.map((r: string) => `${YELLOW}${r}${RESET}`).join(', ')}`;
-		}
-		reasons.push(msg);
-	} else if (pr.reviewDecision === 'CHANGES_REQUESTED') {
-		const changesFrom = (pr.latestReviews?.nodes ?? [])
-			.filter((r: any) => r.state === 'CHANGES_REQUESTED')
-			.map((r: any) => r.author?.login ?? 'unknown');
-		reasons.push(`${RED}✗ Changes requested by: ${changesFrom.join(', ')}${RESET}`);
-	}
+  const reasons: string[] = [];
 
-	// CI failures
-	if (failed.length > 0) {
-		reasons.push(`${RED}✗ ${failed.length} CI check(s) failed${RESET}`);
-	}
+  // Conflicts
+  if (pr.mergeable === 'CONFLICTING') {
+    reasons.push(`${RED}✗ Has merge conflicts with ${pr.baseRefName}${RESET}`);
+  } else if (pr.mergeable === 'UNKNOWN') {
+    reasons.push(
+      `${YELLOW}? Merge conflict status unknown (still calculating)${RESET}`,
+    );
+  }
 
-	// Overall
-	if (pr.mergeStateStatus === 'BEHIND') {
-		reasons.push(`${YELLOW}⚠ Branch is behind ${pr.baseRefName} — needs rebase/merge${RESET}`);
-	}
+  // Reviews
+  if (pr.reviewDecision === 'REVIEW_REQUIRED') {
+    const pendingReviewers = (pr.reviewRequests?.nodes ?? []).map((r: any) => {
+      const reviewer = r.requestedReviewer;
+      return reviewer.slug ? `team/${reviewer.slug}` : reviewer.login;
+    });
+    let msg = `${RED}✗ Review required${RESET}`;
+    if (pendingReviewers.length > 0) {
+      msg += `\n    Waiting on: ${pendingReviewers.map((r: string) => `${YELLOW}${r}${RESET}`).join(', ')}`;
+    }
+    reasons.push(msg);
+  } else if (pr.reviewDecision === 'CHANGES_REQUESTED') {
+    const changesFrom = (pr.latestReviews?.nodes ?? [])
+      .filter((r: any) => r.state === 'CHANGES_REQUESTED')
+      .map((r: any) => r.author?.login ?? 'unknown');
+    reasons.push(
+      `${RED}✗ Changes requested by: ${changesFrom.join(', ')}${RESET}`,
+    );
+  }
 
-	if (reasons.length === 0 && pr.mergeStateStatus === 'CLEAN') {
-		console.log(`${GREEN}✅ Ready to merge${RESET}`);
-	} else if (reasons.length === 0 && pr.mergeStateStatus === 'UNSTABLE') {
-		console.log(`${YELLOW}⚠ Unstable — some non-required checks failed but can merge${RESET}`);
-	} else if (reasons.length === 0) {
-		console.log(`${YELLOW}Status: ${pr.mergeStateStatus}${RESET}`);
-	} else {
-		console.log(`${RED}Cannot merge:${RESET}`);
-		for (const r of reasons) {
-			console.log(`  ${r}`);
-		}
-	}
+  // CI failures
+  if (failed.length > 0) {
+    reasons.push(`${RED}✗ ${failed.length} CI check(s) failed${RESET}`);
+  }
 
-	// ── Conflicts detail ──
-	if (pr.mergeable === 'CONFLICTING') {
-		section('Conflicts');
-		console.log(`${RED}This PR has conflicts with ${pr.baseRefName}.${RESET}`);
-		console.log(`${DIM}Rebase or merge ${pr.baseRefName} into your branch to resolve.${RESET}`);
-	}
+  // Overall
+  if (pr.mergeStateStatus === 'BEHIND') {
+    reasons.push(
+      `${YELLOW}⚠ Branch is behind ${pr.baseRefName} — needs rebase/merge${RESET}`,
+    );
+  }
+
+  if (reasons.length === 0 && pr.mergeStateStatus === 'CLEAN') {
+    console.log(`${GREEN}✅ Ready to merge${RESET}`);
+  } else if (reasons.length === 0 && pr.mergeStateStatus === 'UNSTABLE') {
+    console.log(
+      `${YELLOW}⚠ Unstable — some non-required checks failed but can merge${RESET}`,
+    );
+  } else if (reasons.length === 0) {
+    console.log(`${YELLOW}Status: ${pr.mergeStateStatus}${RESET}`);
+  } else {
+    console.log(`${RED}Cannot merge:${RESET}`);
+    for (const r of reasons) {
+      console.log(`  ${r}`);
+    }
+  }
+
+  // ── Conflicts detail ──
+  if (pr.mergeable === 'CONFLICTING') {
+    section('Conflicts');
+    console.log(`${RED}This PR has conflicts with ${pr.baseRefName}.${RESET}`);
+    console.log(
+      `${DIM}Rebase or merge ${pr.baseRefName} into your branch to resolve.${RESET}`,
+    );
+  }
 }
 
 main().catch((err) => {
-	console.error(`${RED}Error:${RESET}`, err.message);
-	process.exit(1);
+  console.error(`${RED}Error:${RESET}`, err.message);
+  process.exit(1);
 });
