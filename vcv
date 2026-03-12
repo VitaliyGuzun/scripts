@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Get the current branch name
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [[ -z "$branch" ]]; then
+  echo "Error: not in a git repository" >&2
+  exit 1
+fi
+
+# Get the latest "Build" workflow run for this branch
+run_id=$(gh api repos/miroapp-dev/client/actions/runs \
+  --method GET \
+  -f branch="$branch" \
+  -f per_page=20 \
+  --jq '.workflow_runs[] | select(.name == "Build") | .id' 2>/dev/null | head -1)
+
+if [[ -z "$run_id" ]]; then
+  echo "Error: no Build workflow run found for branch '$branch'" >&2
+  exit 1
+fi
+
+# Get the "Tag client version: ..." step name from the Build job
+version=$(gh api "repos/miroapp-dev/client/actions/runs/$run_id/jobs" \
+  --jq '.jobs[] | select(.name == "Build") | .steps[] | select(.name | startswith("Tag client version:")) | .name' 2>/dev/null \
+  | sed 's/^Tag client version: //')
+
+if [[ -z "$version" ]]; then
+  echo "Error: could not find client version in Build job of run $run_id" >&2
+  exit 1
+fi
+
+echo "?clientVersion=$version"
