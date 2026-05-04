@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Prints a list of release numbers with PRs and descriptions. It might be usefull for debugging releases.
+# Examples:
+# vreleases
+# 1.94983.0  04 May 2026, 10:26
+#  8a8b4459fc5 1.94983.0 CWE-1321: Fix prototype Pollution via unguarded for...in
+#   b19aa55958a 1.94982.0 L10N-POST-EDIT feat: Update translations with post-edits for localization
+# 1.94973.0  04 May 2026, 09:29
+#   d418cdd8d5d 1.94973.0 L10N-POST-EDIT feat: Update translations with post-edits for localization
+#   572a261b76f 1.94972.0 FEDEX-971: use tsgo for app typecheck
+
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) || {
     echo "Error: not in a GitHub repository or 'gh' not available" >&2
     exit 1

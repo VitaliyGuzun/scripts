@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This script must be run from a repository with a branch selected
+# It fetches the client version from the latest "Build" workflow run for the current branch
+# Examples:
+# vcv
+
 # Get the current branch name
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [[ -z "$branch" ]]; then
