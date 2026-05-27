@@ -14,11 +14,11 @@ switch-local() {
 }
 
 # Examples:
-# switch-env autotests-12 local (default)
+# switch-env staging-eu02 local (default)
 # switch-env staging-eu02 your-custom-client-version from CI/CD (1.94983.0 for example)
 
 switch-env() {
-  local envName="${1:-autotests-12}"
+  local envName="${1:-staging-eu02}"
   local client="${2:-local}"
   cd e2e-tests/client && yarn spectator switch -n "${envName}" -c "$client"
   cd ../..
@@ -38,10 +38,16 @@ vtest-docker() {
 }
 
 # Tests without docker - this does not check screenshots
+# Examples:
+# vtest 1234567890 0 headless (default)
+# vtest 1234567890 0 headful
+
 vtest() {
   local allureId="${1}"
-  local repeat="${2:-0}"
-  cd e2e-tests/client && yarn spectator test --allure-id "${allureId}" -f "${repeat}"
+  local mode="${2:-headless}"
+  local repeat="${3:-0}"
+  echo "Running test with allureId: ${allureId}, mode: ${mode}, repeat: ${repeat}"
+  cd e2e-tests/client && yarn spectator test --allure-id "${allureId}" -m "${mode}" -f "${repeat}"
   cd ../..
 }
 
